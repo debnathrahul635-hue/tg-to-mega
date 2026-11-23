@@ -1,0 +1,8 @@
+env*
+__pycache__/
+*.pyc
+*.pyo
+*.db
+*.session
+downloads/
+.ipynb_checkpoints/
