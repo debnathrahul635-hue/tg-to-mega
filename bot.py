@@ -570,12 +570,15 @@ async def telegram_media_handler(client: Client, message: Message):
 # ---- /batch Link Range Handler ---- #
 # Supports:
 # /batch https://t.me/c/3930712197/96-100
-# /batch https://t.me/c/3930712197/107 - 111
+# /batch https://t.me/c/3930712197/2/111 (Forum Topic links)
 # /batch https://t.me/channel_name/10-20
 # Or directly pasting the link
 @app.on_message(
     filters.private
-    & (filters.command("batch") | filters.regex(r"https?://t\.me/(?:c/(\d+)|([a-zA-Z0-9_]+))/(\d+)(?:[ -]+(\d+))?"))
+    & (
+        filters.command("batch")
+        | filters.regex(r"https?://t\.me/(?:c/(\d+)|([a-zA-Z0-9_]+))/(?:(\d+)/)?(\d+)(?:[ -]+(\d+))?")
+    )
 )
 async def batch_link_handler(client: Client, message: Message):
     user_id = message.from_user.id
@@ -583,7 +586,7 @@ async def batch_link_handler(client: Client, message: Message):
         return
 
     text = message.text.strip()
-    match = re.search(r"https?://t\.me/(?:c/(\d+)|([a-zA-Z0-9_]+))/(\d+)(?:[ -]+(\d+))?", text)
+    match = re.search(r"https?://t\.me/(?:c/(\d+)|([a-zA-Z0-9_]+))/(?:(\d+)/)?(\d+)(?:[ -]+(\d+))?", text)
     if not match:
         await message.reply_text(
             "⚠️ **Usage:**\n"
@@ -592,7 +595,7 @@ async def batch_link_handler(client: Client, message: Message):
         )
         return
 
-    priv_cid, pub_cid, start_id_str, end_id_str = match.groups()
+    priv_cid, pub_cid, topic_id_str, start_id_str, end_id_str = match.groups()
 
     if priv_cid:
         chat_id = int(f"-100{priv_cid}")
@@ -632,9 +635,19 @@ async def batch_link_handler(client: Client, message: Message):
             except Exception as e2:
                 print(f"⚠️ get_chat alternate failed: {e2}")
 
+    # Inspect recent chat messages to find latest ID
+    latest_seen_id = None
+    try:
+        async for m in client.get_chat_history(chat_id, limit=3):
+            if latest_seen_id is None:
+                latest_seen_id = m.id
+            print(f"👀 Recent in '{chat_title}': Msg #{m.id} | Media: {bool(m.media)}")
+    except Exception as e:
+        print(f"⚠️ get_chat_history notice: {e}")
+
     # Step 2: Fetch messages
     msg_ids = list(range(start_id, end_id + 1))
-    print(f"🔍 Fetching {len(msg_ids)} message(s) from '{chat_title}' ({chat_id})...")
+    print(f"🔍 Fetching {len(msg_ids)} message(s) from '{chat_title}' ({chat_id}): IDs {start_id}..{end_id}")
 
     try:
         fetched_messages = await client.get_messages(chat_id, msg_ids)
@@ -672,20 +685,18 @@ async def batch_link_handler(client: Client, message: Message):
         if queued_count > 0:
             await fetch_msg.edit_text(
                 f"✅ **Queued {queued_count} file(s) from '{chat_title}'!**\n"
-                "⚡ They will be downloaded and uploaded to Mega.nz one by one."
+                "⚡ They will be downloaded and uploaded to Mega.nz sequentially."
             )
         else:
-            details = []
-            if empty_count > 0:
-                details.append(f"• `{empty_count}` message(s) do not exist or were deleted.")
-            if text_only_count > 0:
-                details.append(f"• `{text_only_count}` message(s) contained only text/links (no media file).")
-            detail_str = "\n".join(details) if details else "No media found."
-
+            hint = f"\n• 💡 The latest active message in this group is currently **#{latest_seen_id}**." if latest_seen_id else ""
             await fetch_msg.edit_text(
                 f"ℹ️ **No media found in '{chat_title}' (range {start_id}–{end_id}):**\n\n"
-                f"{detail_str}\n\n"
-                "💡 **Tip:** Check that the message IDs are correct. You can also simply **select and forward** the videos directly to this bot!"
+                f"• `{empty_count}` message ID(s) do not exist or were deleted.{hint}\n\n"
+                "💡 **How to get the exact link:**\n"
+                "1. Right-click or tap the video inside the group.\n"
+                "2. Click **'Copy Message Link'**.\n"
+                "3. Paste that exact link here!\n\n"
+                "*(Or simply select the videos in that group and forward them to this bot!)*"
             )
 
     except (ChannelPrivate, ChatAdminRequired, ChannelInvalid) as e:
