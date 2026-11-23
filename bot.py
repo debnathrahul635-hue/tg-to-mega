@@ -1,6 +1,6 @@
 import os
 import time
-import asyncio
+import subprocess
 from pyrogram import Client, filters
 from pyrogram.types import (
     Message,
@@ -14,13 +14,12 @@ from downloader import download_telegram_file
 from mega_cli import MegaCLI
 from progress import human_bytes, time_formatter
 
-# ---- Initialize Pyrogram Bot ---- #
+# ---- Initialize Pyrogram Bot (Identical to GDrive Bot) ---- #
 app = Client(
     "tg_to_mega_bot",
     api_id=Config.API_ID,
     api_hash=Config.API_HASH,
     bot_token=Config.BOT_TOKEN,
-    in_memory=True,
 )
 
 
@@ -59,11 +58,19 @@ def back_keyboard():
 # ---- /start Command ---- #
 @app.on_message(filters.command("start") & filters.private)
 async def start_handler(client: Client, message: Message):
-    if not is_authorized(message.from_user.id):
-        await message.reply_text("⛔ **Access Denied:** You are not authorized to use this bot.")
+    user_id = message.from_user.id
+    user_name = message.from_user.first_name or "Friend"
+    print(f"📩 /start received from {user_name} (ID: {user_id})")
+
+    if not is_authorized(user_id):
+        print(f"⛔ Access Denied for User ID: {user_id} (Configured OWNER_ID: {Config.OWNER_ID})")
+        await message.reply_text(
+            f"⛔ **Access Denied:** You are not authorized.\n\n"
+            f"Your Telegram User ID is: `{user_id}`\n\n"
+            f"Set `OWNER_ID = {user_id}` in your Colab config to allow yourself!"
+        )
         return
 
-    user_name = message.from_user.first_name or "Friend"
     text = (
         f"👋 **Hello {user_name}!**\n\n"
         "⚡ **Mega.nz Telegram Uploader (Official MEGAcmd Engine)**\n\n"
@@ -258,8 +265,15 @@ async def callback_handler(client: Client, query: CallbackQuery):
     )
 )
 async def telegram_media_handler(client: Client, message: Message):
-    if not is_authorized(message.from_user.id):
-        await message.reply_text("⛔ Access Denied.")
+    user_id = message.from_user.id
+    user_name = message.from_user.first_name or "Friend"
+    print(f"📦 Media received from {user_name} (ID: {user_id})")
+
+    if not is_authorized(user_id):
+        print(f"⛔ Access Denied for media from {user_id}")
+        await message.reply_text(
+            f"⛔ **Access Denied:** Your User ID `{user_id}` is not authorized."
+        )
         return
 
     # Extract media details
@@ -286,6 +300,8 @@ async def telegram_media_handler(client: Client, message: Message):
         await message.reply_text("❌ **Error:** File size is 0 bytes.")
         return
 
+    print(f"📥 Starting download: {file_name} ({human_bytes(file_size)})")
+
     status_msg = await message.reply_text(
         f"🔍 **Processing:** `{file_name}`\n"
         f"📦 **Size:** `{human_bytes(file_size)}`\n"
@@ -296,7 +312,10 @@ async def telegram_media_handler(client: Client, message: Message):
     # Step 1: Download from Telegram to local disk with live progress
     file_path = await download_telegram_file(client, message, status_msg)
     if not file_path or not os.path.exists(file_path):
+        print("❌ Download failed or cancelled.")
         return
+
+    print(f"✅ Downloaded to: {file_path}")
 
     # Step 2: Determine target folder on Mega
     user_info = db.get_user(message.from_user.id)
@@ -316,6 +335,7 @@ async def telegram_media_handler(client: Client, message: Message):
     )
 
     start_upload_time = time.time()
+    print(f"🚀 Uploading to Mega folder: {target_folder}...")
 
     # Step 3: Upload via official MEGAcmd
     success, mega_link, msg = await MegaCLI.upload_file(file_path, target_folder)
@@ -331,6 +351,7 @@ async def telegram_media_handler(client: Client, message: Message):
     if success:
         elapsed = time.time() - start_upload_time
         avg_speed = human_bytes(int(file_size / elapsed)) if elapsed > 0 else "N/A"
+        print(f"🎉 Upload successful! Link: {mega_link}")
 
         # Update database stats
         db.update_stats(message.from_user.id, file_size)
@@ -355,6 +376,7 @@ async def telegram_media_handler(client: Client, message: Message):
         )
         await status_msg.edit_text(success_text, reply_markup=keyboard)
     else:
+        print(f"❌ Upload failed: {msg}")
         await status_msg.edit_text(f"❌ **Upload Failed:** `{msg}`")
 
 
@@ -365,38 +387,40 @@ async def telegram_media_handler(client: Client, message: Message):
     & ~filters.command(["start", "help", "status", "storage", "setfolder", "recent"])
 )
 async def text_fallback(client: Client, message: Message):
-    if not is_authorized(message.from_user.id):
+    user_id = message.from_user.id
+    print(f"💬 Text received from {message.from_user.first_name} (ID: {user_id}): {message.text}")
+
+    if not is_authorized(user_id):
+        await message.reply_text(
+            f"⛔ **Access Denied:** Your User ID `{user_id}` is not authorized.\n"
+            f"Set `OWNER_ID = {user_id}` in Colab."
+        )
         return
+
     await message.reply_text(
         "📎 **Send me any media** (video, document, audio, photo) to upload to Mega.nz!\n\n"
         "Type `/help` for all commands.",
     )
 
 
-# ---- Main Entry Point ---- #
-async def main():
+# ---- Main Entry Point (Standard Pyrogram app.run() like GDrive bot) ---- #
+if __name__ == "__main__":
     print("🚀 Mega.nz Telegram Bot is starting...")
     print(f"📂 Target Mega folder: {Config.MEGA_FOLDER}")
     if Config.OWNER_ID:
         print(f"🔒 Restricted to user ID: {Config.OWNER_ID}")
-
-    # Initialize MEGAcmd login
-    print("🔐 Authenticating with MEGAcmd...")
-    login_ok, login_msg = await MegaCLI.login(Config.MEGA_EMAIL, Config.MEGA_PASSWORD)
-    if login_ok:
-        print(f"✅ MEGAcmd Login: {login_msg}")
     else:
-        print(f"⚠️ MEGAcmd Warning: {login_msg}")
+        print("⚠️ No OWNER_ID set — bot is open to all users!")
 
-    print("🤖 Starting Pyrogram Telegram Client...")
-    await app.start()
-    print("✨ Bot is active and listening for messages!")
-    
-    # Idle until interrupted
-    from pyrogram import idle
-    await idle()
-    await app.stop()
+    # Verify MEGAcmd status
+    try:
+        check = subprocess.run(["mega-whoami"], capture_output=True, text=True)
+        if "@" in check.stdout:
+            print(f"✅ MEGAcmd verified: {check.stdout.strip()}")
+        else:
+            print(f"⚠️ MEGAcmd status: {check.stdout.strip() or check.stderr.strip()}")
+    except Exception as e:
+        print(f"⚠️ MEGAcmd check error: {e}")
 
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    print("🤖 Starting Pyrogram Telegram Client via app.run()...")
+    app.run()
