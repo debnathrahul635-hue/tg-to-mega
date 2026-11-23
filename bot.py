@@ -474,7 +474,12 @@ async def callback_handler(client: Client, query: CallbackQuery):
 
 
 # ---- Helper Function to Queue a Media Message ---- #
-async def enqueue_media_message(client: Client, message: Message, custom_title: Optional[str] = None):
+async def enqueue_media_message(
+    client: Client,
+    message: Message,
+    notify_chat_id: Optional[int] = None,
+    custom_title: Optional[str] = None,
+):
     """Extracts media details and places the task into the upload queue."""
     global _task_counter
 
@@ -499,24 +504,29 @@ async def enqueue_media_message(client: Client, message: Message, custom_title: 
     if file_size == 0:
         return False
 
+    target_chat = notify_chat_id or message.chat.id
     queue = get_queue()
     _task_counter += 1
     task_num = _task_counter
     pos = queue.qsize() + (1 if _current_item else 0)
 
-    if pos == 0:
-        status_msg = await message.reply_text(
-            f"⏳ **Starting:** `{file_name}`\n📦 **Size:** `{human_bytes(file_size)}`",
-            quote=True,
-        )
-    else:
-        status_msg = await message.reply_text(
-            f"📥 **Added to Queue (Position #{pos + 1}):**\n"
-            f"📄 `{file_name}`\n"
-            f"📦 **Size:** `{human_bytes(file_size)}`\n"
-            "⏳ Will process automatically in sequence...",
-            quote=True,
-        )
+    try:
+        if pos == 0:
+            status_msg = await client.send_message(
+                target_chat,
+                f"⏳ **Starting:** `{file_name}`\n📦 **Size:** `{human_bytes(file_size)}`",
+            )
+        else:
+            status_msg = await client.send_message(
+                target_chat,
+                f"📥 **Added to Queue (Position #{pos + 1}):**\n"
+                f"📄 `{file_name}`\n"
+                f"📦 **Size:** `{human_bytes(file_size)}`\n"
+                "⏳ Will process automatically in sequence...",
+            )
+    except Exception as e:
+        print(f"⚠️ Failed to send queue notice to {target_chat}: {e}")
+        status_msg = await message.reply_text(f"⏳ Queued: `{file_name}`")
 
     await queue.put(
         QueueItem(
@@ -554,17 +564,18 @@ async def telegram_media_handler(client: Client, message: Message):
         )
         return
 
-    await enqueue_media_message(client, message)
+    await enqueue_media_message(client, message, notify_chat_id=user_id)
 
 
 # ---- /batch Link Range Handler ---- #
 # Supports:
 # /batch https://t.me/c/3930712197/96-100
+# /batch https://t.me/c/3930712197/107 - 111
 # /batch https://t.me/channel_name/10-20
-# Or directly sending the link range
+# Or directly pasting the link
 @app.on_message(
     filters.private
-    & (filters.command("batch") | filters.regex(r"https?://t\.me/(?:c/(\d+)|([a-zA-Z0-9_]+))/(\d+)(?:-(\d+))?"))
+    & (filters.command("batch") | filters.regex(r"https?://t\.me/(?:c/(\d+)|([a-zA-Z0-9_]+))/(\d+)(?:[ -]+(\d+))?"))
 )
 async def batch_link_handler(client: Client, message: Message):
     user_id = message.from_user.id
@@ -572,7 +583,7 @@ async def batch_link_handler(client: Client, message: Message):
         return
 
     text = message.text.strip()
-    match = re.search(r"https?://t\.me/(?:c/(\d+)|([a-zA-Z0-9_]+))/(\d+)(?:-(\d+))?", text)
+    match = re.search(r"https?://t\.me/(?:c/(\d+)|([a-zA-Z0-9_]+))/(\d+)(?:[ -]+(\d+))?", text)
     if not match:
         await message.reply_text(
             "⚠️ **Usage:**\n"
@@ -583,7 +594,6 @@ async def batch_link_handler(client: Client, message: Message):
 
     priv_cid, pub_cid, start_id_str, end_id_str = match.groups()
 
-    # Determine chat ID
     if priv_cid:
         chat_id = int(f"-100{priv_cid}")
     else:
@@ -597,45 +607,96 @@ async def batch_link_handler(client: Client, message: Message):
 
     total_msgs = end_id - start_id + 1
     if total_msgs > 100:
-        await message.reply_text("⚠️ Maximum 100 messages can be batched in a single range at once.")
+        await message.reply_text("⚠️ Maximum 100 messages can be batched at once.")
         return
 
     fetch_msg = await message.reply_text(
-        f"🔍 **Fetching {total_msgs} message(s) from range `{start_id}` to `{end_id}`...**"
+        f"🔍 **Connecting to `{chat_id}` and checking messages `{start_id}` to `{end_id}`...**"
     )
 
+    # Step 1: Verify chat access and cache access_hash
+    chat_title = str(chat_id)
     try:
-        msg_ids = list(range(start_id, end_id + 1))
-        fetched_messages = await client.get_messages(chat_id, msg_ids)
+        chat = await client.get_chat(chat_id)
+        chat_title = chat.title or chat.first_name or str(chat.id)
+        print(f"✅ Connected to chat: '{chat_title}' ({chat.id})")
+    except Exception as e:
+        print(f"⚠️ get_chat failed for {chat_id}: {e}")
+        if priv_cid and str(chat_id).startswith("-100"):
+            alt_id = -int(priv_cid)
+            try:
+                chat = await client.get_chat(alt_id)
+                chat_id = alt_id
+                chat_title = chat.title or str(chat.id)
+                print(f"✅ Connected with alternate ID: '{chat_title}' ({chat_id})")
+            except Exception as e2:
+                print(f"⚠️ get_chat alternate failed: {e2}")
 
+    # Step 2: Fetch messages
+    msg_ids = list(range(start_id, end_id + 1))
+    print(f"🔍 Fetching {len(msg_ids)} message(s) from '{chat_title}' ({chat_id})...")
+
+    try:
+        fetched_messages = await client.get_messages(chat_id, msg_ids)
         if not isinstance(fetched_messages, list):
             fetched_messages = [fetched_messages]
 
         queued_count = 0
+        empty_count = 0
+        text_only_count = 0
+
         for msg in fetched_messages:
-            if msg and (msg.document or msg.video or msg.audio or msg.photo):
-                ok = await enqueue_media_message(client, msg)
+            if not msg or getattr(msg, "empty", False):
+                empty_count += 1
+                continue
+
+            media = (
+                msg.document
+                or msg.video
+                or msg.audio
+                or msg.photo
+                or msg.animation
+                or msg.voice
+                or msg.video_note
+            )
+
+            if media:
+                ok = await enqueue_media_message(client, msg, notify_chat_id=user_id)
                 if ok:
                     queued_count += 1
+            else:
+                text_only_count += 1
+
+        print(f"📊 Scan results for '{chat_title}': queued={queued_count}, empty={empty_count}, text_only={text_only_count}")
 
         if queued_count > 0:
             await fetch_msg.edit_text(
-                f"✅ **Queued {queued_count} media file(s) successfully!**\n"
+                f"✅ **Queued {queued_count} file(s) from '{chat_title}'!**\n"
                 "⚡ They will be downloaded and uploaded to Mega.nz one by one."
             )
         else:
-            await fetch_msg.edit_text("ℹ️ No media files found in the specified message range.")
+            details = []
+            if empty_count > 0:
+                details.append(f"• `{empty_count}` message(s) do not exist or were deleted.")
+            if text_only_count > 0:
+                details.append(f"• `{text_only_count}` message(s) contained only text/links (no media file).")
+            detail_str = "\n".join(details) if details else "No media found."
 
-    except (ChannelPrivate, ChatAdminRequired, ChannelInvalid):
+            await fetch_msg.edit_text(
+                f"ℹ️ **No media found in '{chat_title}' (range {start_id}–{end_id}):**\n\n"
+                f"{detail_str}\n\n"
+                "💡 **Tip:** Check that the message IDs are correct. You can also simply **select and forward** the videos directly to this bot!"
+            )
+
+    except (ChannelPrivate, ChatAdminRequired, ChannelInvalid) as e:
         await fetch_msg.edit_text(
-            "⚠️ **Cannot access this private channel directly.**\n\n"
-            "Telegram bots cannot read messages from private channels unless added as an admin/member.\n\n"
-            "💡 **Easy Solution:**\n"
-            "Just open that channel, **select all the videos** you want, and **FORWARD** them all at once to this bot!\n\n"
-            "The bot will automatically queue all of them and upload them one by one without any errors!"
+            f"⚠️ **Cannot access chat `{chat_id}`:** `{str(e)}`\n\n"
+            "Make sure the bot has permission to read messages in that group.\n\n"
+            "💡 Or simply **select and forward** the files directly to this bot!"
         )
     except Exception as e:
-        await fetch_msg.edit_text(f"❌ **Error fetching batch:** `{str(e)}`")
+        print(f"❌ Batch error: {e}")
+        await fetch_msg.edit_text(f"❌ **Error:** `{str(e)}`")
 
 
 # ---- Start/Help fallback for non-media text ---- #
