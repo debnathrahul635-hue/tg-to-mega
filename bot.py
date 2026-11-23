@@ -44,10 +44,18 @@ class QueueItem(NamedTuple):
     queue_num: int
 
 
-upload_queue: asyncio.Queue = asyncio.Queue()
+_upload_queue: Optional[asyncio.Queue] = None
 _worker_task: Optional[asyncio.Task] = None
 _current_item: Optional[QueueItem] = None
 _task_counter: int = 0
+
+
+def get_queue() -> asyncio.Queue:
+    """Lazily initializes the queue inside the running event loop."""
+    global _upload_queue
+    if _upload_queue is None:
+        _upload_queue = asyncio.Queue()
+    return _upload_queue
 
 
 def ensure_worker():
@@ -61,10 +69,11 @@ async def queue_worker():
     """Processes upload tasks one by one sequentially from the queue."""
     global _current_item
     print("👷 Queue worker started.")
+    queue = get_queue()
 
     while True:
         try:
-            item: QueueItem = await upload_queue.get()
+            item: QueueItem = await queue.get()
             _current_item = item
 
             client = item.client
@@ -74,7 +83,7 @@ async def queue_worker():
             file_size = item.file_size
             queue_num = item.queue_num
 
-            remaining = upload_queue.qsize()
+            remaining = queue.qsize()
             queue_info = f" [Remaining in queue: {remaining}]" if remaining > 0 else ""
             print(f"🎬 Processing Task #{queue_num}: {file_name} ({human_bytes(file_size)}){queue_info}")
 
@@ -88,7 +97,7 @@ async def queue_worker():
             file_path = await download_telegram_file(client, message, status_msg)
             if not file_path or not os.path.exists(file_path):
                 print(f"❌ Download failed for: {file_name}")
-                upload_queue.task_done()
+                queue.task_done()
                 _current_item = None
                 continue
 
@@ -144,7 +153,7 @@ async def queue_worker():
                 db.update_stats(message.from_user.id, file_size)
                 db.save_upload(message.from_user.id, file_name, file_size, f"{target_folder}/{file_name}")
 
-                rem = upload_queue.qsize()
+                rem = queue.qsize()
                 rem_text = f"\n\n🔄 **Queue Remaining:** `{rem}` file(s)" if rem > 0 else ""
 
                 success_text = (
@@ -161,7 +170,7 @@ async def queue_worker():
                 print(f"❌ Task #{queue_num} upload failed: {msg}")
                 await status_msg.edit_text(f"❌ **Upload Failed:** `{msg}`")
 
-            upload_queue.task_done()
+            queue.task_done()
             _current_item = None
             await asyncio.sleep(1)  # Brief pause between tasks for system stability
 
@@ -172,7 +181,7 @@ async def queue_worker():
                     await _current_item.status_msg.edit_text(f"❌ **Error:** `{str(e)}`")
                 except Exception:
                     pass
-            upload_queue.task_done()
+            queue.task_done()
             _current_item = None
             await asyncio.sleep(1)
 
@@ -273,7 +282,8 @@ async def queue_status_handler(client: Client, message: Message):
     if not is_authorized(message.from_user.id):
         return
 
-    qsize = upload_queue.qsize()
+    queue = get_queue()
+    qsize = queue.qsize()
     if _current_item is None and qsize == 0:
         await message.reply_text("📭 **Queue is currently empty.** No uploads in progress.")
         return
@@ -295,11 +305,12 @@ async def clearqueue_handler(client: Client, message: Message):
     if not is_authorized(message.from_user.id):
         return
 
+    queue = get_queue()
     count = 0
-    while not upload_queue.empty():
+    while not queue.empty():
         try:
-            item = upload_queue.get_nowait()
-            upload_queue.task_done()
+            item = queue.get_nowait()
+            queue.task_done()
             try:
                 await item.status_msg.edit_text("🚫 **Upload cancelled from queue.**")
             except Exception:
@@ -449,7 +460,8 @@ async def callback_handler(client: Client, query: CallbackQuery):
             reply_markup=back_keyboard(),
         )
     elif data == "btn_queue":
-        qsize = upload_queue.qsize()
+        queue = get_queue()
+        qsize = queue.qsize()
         text = "🔄 **Current Queue Status:**\n\n"
         if _current_item:
             text += (
@@ -487,9 +499,10 @@ async def enqueue_media_message(client: Client, message: Message, custom_title: 
     if file_size == 0:
         return False
 
+    queue = get_queue()
     _task_counter += 1
     task_num = _task_counter
-    pos = upload_queue.qsize() + (1 if _current_item else 0)
+    pos = queue.qsize() + (1 if _current_item else 0)
 
     if pos == 0:
         status_msg = await message.reply_text(
@@ -505,7 +518,7 @@ async def enqueue_media_message(client: Client, message: Message, custom_title: 
             quote=True,
         )
 
-    await upload_queue.put(
+    await queue.put(
         QueueItem(
             client=client,
             message=message,
