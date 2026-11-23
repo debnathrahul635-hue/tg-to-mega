@@ -337,14 +337,20 @@ async def telegram_media_handler(client: Client, message: Message):
     start_upload_time = time.time()
     print(f"🚀 Uploading to Mega folder: {target_folder}...")
 
-    # Step 3: Upload via official MEGAcmd
-    success, mega_link, msg = await MegaCLI.upload_file(file_path, target_folder)
+    # Step 3: Upload via official MEGAcmd (with auto-deduplication)
+    success, mega_link, msg, final_file_name = await MegaCLI.upload_file(file_path, target_folder)
+    if final_file_name:
+        file_name = final_file_name
 
     # Step 4: Remove local temporary file
     try:
-        if os.path.exists(file_path):
+        dir_name = os.path.dirname(file_path)
+        actual_path = os.path.join(dir_name, file_name)
+        if os.path.exists(actual_path):
+            os.remove(actual_path)
+            print(f"🗑️ Removed temp file: {actual_path}")
+        elif os.path.exists(file_path):
             os.remove(file_path)
-            print(f"🗑️ Removed temp file: {file_path}")
     except Exception:
         pass
 

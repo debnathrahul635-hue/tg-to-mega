@@ -1,6 +1,7 @@
 import asyncio
 import os
 import re
+import time
 from typing import Tuple, Dict
 
 
@@ -76,16 +77,16 @@ class MegaCLI:
         return stats
 
     @staticmethod
-    async def upload_file(local_path: str, remote_folder: str) -> Tuple[bool, str, str]:
+    async def upload_file(local_path: str, remote_folder: str) -> Tuple[bool, str, str, str]:
         """
         Uploads a local file to remote_folder on MEGA using official mega-put.
-        Instant, reliable, and guaranteed never to hang.
+        Auto-deduplicates filenames with timestamp so no existing file is ever overwritten.
         
         Returns:
-            (success: bool, mega_link: str, message: str)
+            (success: bool, mega_link: str, message: str, final_file_name: str)
         """
         if not os.path.exists(local_path):
-            return False, "https://mega.nz/fm", "File not found locally."
+            return False, "https://mega.nz/fm", "File not found locally.", ""
 
         file_name = os.path.basename(local_path)
 
@@ -97,14 +98,31 @@ class MegaCLI:
         print(f"📁 Ensuring remote directory exists: {remote_folder}")
         await run_cmd(["mega-mkdir", "-p", remote_folder], timeout=15)
 
-        # Step 2: Upload via mega-put directly into folder
+        # Step 2: Check if file already exists in remote folder to prevent overwriting
+        ls_code, ls_out = await run_cmd(["mega-ls", remote_folder], timeout=10)
+        if ls_code == 0:
+            existing_files = [line.strip() for line in ls_out.splitlines() if line.strip()]
+            if file_name in existing_files:
+                base, ext = os.path.splitext(file_name)
+                timestamp = int(time.time())
+                new_file_name = f"{base}_{timestamp}{ext}"
+                new_local_path = os.path.join(os.path.dirname(local_path), new_file_name)
+                try:
+                    os.rename(local_path, new_local_path)
+                    local_path = new_local_path
+                    file_name = new_file_name
+                    print(f"⚠️ Duplicate found on Mega. Renamed to avoid overwrite: {file_name}")
+                except Exception as e:
+                    print(f"Rename warning: {e}")
+
+        # Step 3: Upload via mega-put directly into folder
         dest_target = f"{remote_folder}/"
         print(f"⚡ Running mega-put: {local_path} -> {dest_target}")
         put_code, put_out = await run_cmd(["mega-put", local_path, dest_target], timeout=1800)
         print(f"📋 mega-put output (code {put_code}):\n{put_out}")
 
         if put_code != 0:
-            return False, "https://mega.nz/fm", f"mega-put error: {put_out}"
+            return False, "https://mega.nz/fm", f"mega-put error: {put_out}", file_name
 
         print(f"✅ Successfully transferred to Mega: {remote_folder}/{file_name}")
-        return True, "https://mega.nz/fm", "Success"
+        return True, "https://mega.nz/fm", "Success", file_name
