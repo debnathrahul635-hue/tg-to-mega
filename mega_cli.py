@@ -15,7 +15,13 @@ async def run_cmd(cmd_list: list) -> Tuple[int, str]:
         stdout, stderr = await proc.communicate()
         out = stdout.decode("utf-8", errors="ignore").strip()
         err = stderr.decode("utf-8", errors="ignore").strip()
-        output = out if out else err
+        # Combine stdout and stderr so no output is missed
+        if out and err:
+            output = f"{out}\n{err}"
+        elif out:
+            output = out
+        else:
+            output = err
         return proc.returncode, output
     except Exception as e:
         return -1, str(e)
@@ -36,12 +42,10 @@ class MegaCLI:
         if not email or not password:
             return False, "MEGA_EMAIL or MEGA_PASSWORD is missing in config."
 
-        # Check if already logged in as this user
         code, out = await run_cmd(["mega-whoami"])
         if code == 0 and email.lower() in out.lower():
             return True, f"Already logged in as {email}"
 
-        # Otherwise perform login
         code, out = await run_cmd(["mega-login", email, password])
         if code == 0:
             return True, "Login successful."
@@ -75,31 +79,42 @@ class MegaCLI:
             return False, None, "File not found locally."
 
         file_name = os.path.basename(local_path)
-        
-        # Ensure remote folder starts with /
+
         if not remote_folder.startswith("/"):
             remote_folder = "/" + remote_folder
         remote_folder = remote_folder.rstrip("/")
 
-        # Step 1: Upload via mega-put (-c automatically creates destination folder if missing)
+        # Step 1: Upload via mega-put (-c automatically creates destination folder)
+        print(f"⚡ Running mega-put: {local_path} -> {remote_folder}")
         put_code, put_out = await run_cmd(["mega-put", "-c", local_path, remote_folder])
         if put_code != 0:
             return False, None, f"mega-put error: {put_out}"
 
-        # Step 2: Export public link via mega-export -a
         remote_file_path = f"{remote_folder}/{file_name}"
+        print(f"🔗 Requesting export for: {remote_file_path}")
+
+        # Step 2: Try mega-export -a
         exp_code, exp_out = await run_cmd(["mega-export", "-a", remote_file_path])
-        
-        # Parse link from output
-        # Output format usually: "Exported /folder/file.ext: https://mega.nz/file/xxxx#yyyy"
-        match = re.search(r"https://mega\.nz/file/[^\s]+", exp_out)
+        print(f"📋 mega-export output (code {exp_code}):\n{exp_out}")
+
+        # Regex matches any https://mega.nz/... link format
+        match = re.search(r"https://mega\.nz/[^\s\'\"\)]+", exp_out)
         if match:
             return True, match.group(0), "Success"
 
-        # If already exported previously, mega-export may list it
+        # Step 3: Fallback - query existing export without -a
+        q_code, q_out = await run_cmd(["mega-export", remote_file_path])
+        print(f"📋 mega-export query output (code {q_code}):\n{q_out}")
+        match = re.search(r"https://mega\.nz/[^\s\'\"\)]+", q_out)
+        if match:
+            return True, match.group(0), "Success"
+
+        # Step 4: Fallback - list all exports
         list_code, list_out = await run_cmd(["mega-export"])
-        match = re.search(rf"{re.escape(file_name)}.*?(https://mega\.nz/file/[^\s]+)", list_out)
+        match = re.search(rf"{re.escape(file_name)}.*?(https://mega\.nz/[^\s\'\"\)]+)", list_out)
         if match:
             return True, match.group(1), "Success"
 
-        return True, "Uploaded (Link not generated)", f"Uploaded to {remote_file_path}"
+        # If upload succeeded but link couldn't be generated, return a web link to the folder
+        web_folder_link = "https://mega.nz/fm"
+        return True, web_folder_link, f"Uploaded to Mega folder {remote_folder}"

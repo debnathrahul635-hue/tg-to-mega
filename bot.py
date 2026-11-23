@@ -347,37 +347,35 @@ async def telegram_media_handler(client: Client, message: Message):
     except Exception:
         pass
 
-    # Step 5: Send response
-    if success:
-        elapsed = time.time() - start_upload_time
-        avg_speed = human_bytes(int(file_size / elapsed)) if elapsed > 0 else "N/A"
-        print(f"🎉 Upload successful! Link: {mega_link}")
+        # Step 5: Send response
+        buttons = []
+        if mega_link and mega_link.startswith("http"):
+            buttons.append(InlineKeyboardButton("📥 Open Link", url=mega_link))
+        buttons.append(InlineKeyboardButton("☁️ Open Mega", url="https://mega.nz/fm"))
+        keyboard = InlineKeyboardMarkup([buttons])
 
-        # Update database stats
-        db.update_stats(message.from_user.id, file_size)
-        db.save_upload(message.from_user.id, file_name, file_size, mega_link or "N/A")
+        if success:
+            elapsed = time.time() - start_upload_time
+            avg_speed = human_bytes(int(file_size / elapsed)) if elapsed > 0 else "N/A"
+            print(f"🎉 Upload successful! Link: {mega_link}")
 
-        success_text = (
-            "🎉 **Successfully Uploaded to Mega.nz!**\n\n"
-            f"📄 **File:** `{file_name}`\n"
-            f"📦 **Size:** `{human_bytes(file_size)}`\n"
-            f"📂 **Folder:** `{target_folder}`\n"
-            f"⚡ **Upload Speed:** `{avg_speed}/s`\n"
-            f"⏱️ **Upload Time:** `{time_formatter(elapsed)}`\n\n"
-            f"🔗 **Download Link:**\n`{mega_link}`"
-        )
-        keyboard = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton("📥 Open Link", url=mega_link),
-                    InlineKeyboardButton("☁️ Open Mega", url="https://mega.nz/fm"),
-                ]
-            ]
-        )
-        await status_msg.edit_text(success_text, reply_markup=keyboard)
-    else:
-        print(f"❌ Upload failed: {msg}")
-        await status_msg.edit_text(f"❌ **Upload Failed:** `{msg}`")
+            # Update database stats
+            db.update_stats(message.from_user.id, file_size)
+            db.save_upload(message.from_user.id, file_name, file_size, mega_link or "N/A")
+
+            success_text = (
+                "🎉 **Successfully Uploaded to Mega.nz!**\n\n"
+                f"📄 **File:** `{file_name}`\n"
+                f"📦 **Size:** `{human_bytes(file_size)}`\n"
+                f"📂 **Folder:** `{target_folder}`\n"
+                f"⚡ **Upload Speed:** `{avg_speed}/s`\n"
+                f"⏱️ **Upload Time:** `{time_formatter(elapsed)}`\n\n"
+                f"🔗 **Download Link:**\n`{mega_link}`"
+            )
+            await status_msg.edit_text(success_text, reply_markup=keyboard)
+        else:
+            print(f"❌ Upload failed: {msg}")
+            await status_msg.edit_text(f"❌ **Upload Failed:** `{msg}`")
 
 
 # ---- Start/Help fallback for non-media text ---- #
