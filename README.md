@@ -116,3 +116,25 @@ print("✅ Configuration and MEGAcmd login verified!")
 ---
 
 ## 📂 Project Architecture
+tg-to-mega/ ├── bot.py
+# Main bot entry point & Pyrogram message handlers ├── config.py 
+# Environment variable loader & defaults ├── database.py 
+# SQLite database for stats & upload history ├── downloader.py 
+# Pyrogram media downloader with live progress callback ├── mega_cli.py 
+# Official MEGAcmd wrapper (login, upload, deduplication) ├── progress.py # Progress bar calculation, speed, and ETA formatting ├── requirements.txt # Python package dependencies ├── .gitignore 
+# Git ignore rules └── README.md 
+# Documentation
+
+---
+
+## 🔒 Security & Privacy
+
+- All credentials (`BOT_TOKEN`, `MEGA_PASSWORD`, etc.) are passed via environment variables.
+- By setting `OWNER_ID`, only your Telegram account can interact with the bot. Any unauthorized users are automatically denied.
+- Temporary files on Colab are immediately removed upon upload completion.
+
+---
+
+## ⚖️ License
+
+Distributed under the [MIT License](LICENSE).
