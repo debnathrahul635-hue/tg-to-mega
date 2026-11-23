@@ -344,43 +344,37 @@ async def telegram_media_handler(client: Client, message: Message):
     try:
         if os.path.exists(file_path):
             os.remove(file_path)
+            print(f"🗑️ Removed temp file: {file_path}")
     except Exception:
         pass
 
-        # Step 5: Send response
-        buttons = []
-        if mega_link and ("mega.nz/file" in mega_link or "mega.nz/#" in mega_link):
-            buttons.append(InlineKeyboardButton("📥 Download Link", url=mega_link))
-        buttons.append(InlineKeyboardButton("☁️ Open Mega Drive", url="https://mega.nz/fm"))
-        keyboard = InlineKeyboardMarkup([buttons])
+    # Step 5: Send response (Instant confirmation like GDrive bot)
+    keyboard = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("☁️ Open Mega Drive", url="https://mega.nz/fm")]]
+    )
 
-        if success:
-            elapsed = time.time() - start_upload_time
-            avg_speed = human_bytes(int(file_size / elapsed)) if elapsed > 0 else "N/A"
-            print(f"🎉 Upload successful! Link: {mega_link}")
+    if success:
+        elapsed = time.time() - start_upload_time
+        avg_speed = human_bytes(int(file_size / elapsed)) if elapsed > 0 else "N/A"
+        print(f"🎉 Upload successful! Saved to {target_folder}/{file_name}")
 
-            # Update database stats
-            db.update_stats(message.from_user.id, file_size)
-            db.save_upload(message.from_user.id, file_name, file_size, mega_link or "N/A")
+        # Update database stats
+        db.update_stats(message.from_user.id, file_size)
+        db.save_upload(message.from_user.id, file_name, file_size, f"{target_folder}/{file_name}")
 
-            if "mega.nz/file" in mega_link or "mega.nz/#" in mega_link:
-                location_text = f"🔗 **Download Link:**\n`{mega_link}`"
-            else:
-                location_text = f"☁️ **Saved to Mega:** `/TelegramUploads/{file_name}`"
-
-            success_text = (
-                "🎉 **Successfully Uploaded to Mega.nz!**\n\n"
-                f"📄 **File:** `{file_name}`\n"
-                f"📦 **Size:** `{human_bytes(file_size)}`\n"
-                f"📂 **Folder:** `{target_folder}`\n"
-                f"⚡ **Upload Speed:** `{avg_speed}/s`\n"
-                f"⏱️ **Upload Time:** `{time_formatter(elapsed)}`\n\n"
-                f"{location_text}"
-            )
-            await status_msg.edit_text(success_text, reply_markup=keyboard)
-        else:
-            print(f"❌ Upload failed: {msg}")
-            await status_msg.edit_text(f"❌ **Upload Failed:** `{msg}`")
+        success_text = (
+            "🎉 **Successfully Uploaded to Mega.nz!**\n\n"
+            f"📄 **File:** `{file_name}`\n"
+            f"📦 **Size:** `{human_bytes(file_size)}`\n"
+            f"📂 **Folder:** `{target_folder}`\n"
+            f"⚡ **Speed:** `{avg_speed}/s`\n"
+            f"⏱️ **Time:** `{time_formatter(elapsed)}`\n\n"
+            "☁️ **Status:** Saved to your Mega.nz Cloud Drive"
+        )
+        await status_msg.edit_text(success_text, reply_markup=keyboard)
+    else:
+        print(f"❌ Upload failed: {msg}")
+        await status_msg.edit_text(f"❌ **Upload Failed:** `{msg}`")
 
 
 # ---- Start/Help fallback for non-media text ---- #
