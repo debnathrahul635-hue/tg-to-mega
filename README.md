@@ -1,4 +1,4 @@
-⚡Telegram to Mega.nz Uploader (Colab Edition)
+# ⚡ Telegram to Mega.nz Uploader (Batch & Queue Edition)
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python)](https://python.org)
 [![Pyrogram](https://img.shields.io/badge/Pyrogram-v2.0%2B-orange?logo=telegram)](https://github.com/pyrogram/pyrogram)
@@ -7,20 +7,22 @@
 
 A fast, automated Telegram bot designed to upload videos, documents, music, and photos from **Telegram directly to Mega.nz** using **Google Colab** as a free cloud server.
 
-Powered by the official **MEGAcmd** C++ engine — completely bypassing the modern MEGA API 402 Proof-of-Work bot-detection challenges.
+Powered by an asynchronous **Sequential Queue** and the official **MEGAcmd** C++ engine — completely eliminating rate limits, disk overflow, and bot errors when transferring multiple large files.
 
 ---
 
 ## ✨ Features
 
-- 🚀 **Fast Cloud Uploads**: Leverages Google Colab's high-speed datacenter connection (up to 100 MB/s).
-- 💾 **20 GB Free Cloud Storage**: Upload directly to your personal Mega.nz account.
-- ⚡ **Official MEGAcmd Engine**: Rock-solid stability without rate limits, session drops, or `402` blocks.
-- 📊 **Live Progress Bar**: Displays real-time download speed, percentage, transferred bytes, and ETA.
+- 📥 **Batch Forwarding**: Select and forward 10, 20, or 50+ videos at once — the bot queues and uploads them **one by one automatically**.
+- 🔗 **Message Link Range (`/batch`)**: Batch download by link range (e.g. `https://t.me/c/.../96-100`).
+- ⚡ **Sequential Queue Worker**: Downloads and uploads one file at a time so Colab disk space never fills up and uploads never collide.
+- 💾 **20 GB Free Cloud Storage**: Uploads directly to your personal Mega.nz account.
+- 🚀 **Datacenter Speeds**: Leverages Google Colab's high-speed connection (40–100 MB/s).
 - 🛡️ **Duplicate Protection**: Automatically detects existing files on Mega and appends timestamps to prevent overwrites.
+- 📊 **Live Progress Bar**: Displays real-time download speed, percentage, transferred bytes, and ETA.
 - 📁 **Custom Folder Support**: Choose where files are saved with `/setfolder`.
 - 🔒 **Owner Security Lock**: Restricts bot access strictly to your Telegram User ID (`OWNER_ID`).
-- 🧹 **Auto-Cleanup**: Automatically purges temporary files from Colab disk after upload to prevent running out of storage.
+- 🧹 **Instant Disk Cleanup**: Automatically purges temporary files from Colab disk immediately after each upload.
 - 📋 **Upload Tracker**: Tracks your upload stats and last 10 uploads using SQLite (zero setup).
 
 ---
@@ -31,12 +33,15 @@ Powered by the official **MEGAcmd** C++ engine — completely bypassing the mode
 | :--- | :--- |
 | `/start` | Start the bot & display interactive menu |
 | `/help` | Complete usage guide and instructions |
+| `/batch <url>-<range>` | Fetch and queue messages from a link range (e.g. `https://t.me/c/3930712197/96-100`) |
+| `/queue` | Check currently processing file and total items waiting in queue |
+| `/clearqueue` | Cancel and clear all pending uploads from the queue |
 | `/setfolder <name>` | Change destination subfolder on Mega (e.g., `/setfolder Lectures`) |
 | `/setfolder default` | Reset destination folder back to `/TelegramUploads` |
 | `/status` | View your personal upload statistics (files & bytes) |
 | `/storage` | Check real-time Mega.nz account storage (used, free, total) |
 | `/recent` | View your last 10 uploaded files with details |
-| **Send Media** | Send or forward any video, audio, or document to upload |
+| **Forward Media** | Select single or multiple files in any chat and forward here |
 
 ---
 
@@ -100,6 +105,22 @@ print("✅ Configuration and MEGAcmd login verified!")
 
 ---
 
+## 💡 How Batch Uploading Works
+
+### Method A: Multi-Select & Forward (Easiest)
+1. Open any channel or chat on Telegram.
+2. Select 5, 10, 20, or more videos/documents.
+3. Forward them all at once to this bot.
+4. The bot will assign each one a position (`#1, #2, #3...`) and process them sequentially in the background.
+
+### Method B: Link Range
+1. Copy the link of the first message: `https://t.me/c/3930712197/96`
+2. Add `-<end_id>` to specify the range: `https://t.me/c/3930712197/96-100`
+3. Send to bot: `/batch https://t.me/c/3930712197/96-100`
+*(Note: If the channel is private and the bot is not a member, use Method A instead).*
+
+---
+
 ## 🔑 Where to Get Credentials?
 
 1. **Telegram `API_ID` & `API_HASH`**:
@@ -114,11 +135,12 @@ print("✅ Configuration and MEGAcmd login verified!")
    - Sign up for a free account with 20 GB at [mega.nz](https://mega.nz).
 
 ---
+
 ## 📂 Project Architecture
 
-```
+```text
 tg-to-mega/
-├── bot.py                # Main bot entry point & Pyrogram message handlers
+├── bot.py                # Main bot entry point, Queue worker & message handlers
 ├── config.py             # Environment variable loader & defaults
 ├── database.py           # SQLite database for stats & upload history
 ├── downloader.py         # Pyrogram media downloader with live progress callback
@@ -128,6 +150,7 @@ tg-to-mega/
 ├── .gitignore            # Git ignore rules
 └── README.md             # Documentation
 ```
+
 ---
 
 ## 🔒 Security & Privacy
