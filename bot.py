@@ -349,9 +349,9 @@ async def telegram_media_handler(client: Client, message: Message):
 
         # Step 5: Send response
         buttons = []
-        if mega_link and mega_link.startswith("http"):
-            buttons.append(InlineKeyboardButton("📥 Open Link", url=mega_link))
-        buttons.append(InlineKeyboardButton("☁️ Open Mega", url="https://mega.nz/fm"))
+        if mega_link and ("mega.nz/file" in mega_link or "mega.nz/#" in mega_link):
+            buttons.append(InlineKeyboardButton("📥 Download Link", url=mega_link))
+        buttons.append(InlineKeyboardButton("☁️ Open Mega Drive", url="https://mega.nz/fm"))
         keyboard = InlineKeyboardMarkup([buttons])
 
         if success:
@@ -363,6 +363,11 @@ async def telegram_media_handler(client: Client, message: Message):
             db.update_stats(message.from_user.id, file_size)
             db.save_upload(message.from_user.id, file_name, file_size, mega_link or "N/A")
 
+            if "mega.nz/file" in mega_link or "mega.nz/#" in mega_link:
+                location_text = f"🔗 **Download Link:**\n`{mega_link}`"
+            else:
+                location_text = f"☁️ **Saved to Mega:** `/TelegramUploads/{file_name}`"
+
             success_text = (
                 "🎉 **Successfully Uploaded to Mega.nz!**\n\n"
                 f"📄 **File:** `{file_name}`\n"
@@ -370,7 +375,7 @@ async def telegram_media_handler(client: Client, message: Message):
                 f"📂 **Folder:** `{target_folder}`\n"
                 f"⚡ **Upload Speed:** `{avg_speed}/s`\n"
                 f"⏱️ **Upload Time:** `{time_formatter(elapsed)}`\n\n"
-                f"🔗 **Download Link:**\n`{mega_link}`"
+                f"{location_text}"
             )
             await status_msg.edit_text(success_text, reply_markup=keyboard)
         else:
