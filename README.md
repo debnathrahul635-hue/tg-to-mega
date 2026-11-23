@@ -114,17 +114,20 @@ print("✅ Configuration and MEGAcmd login verified!")
    - Sign up for a free account with 20 GB at [mega.nz](https://mega.nz).
 
 ---
-
 ## 📂 Project Architecture
-tg-to-mega/ ├── bot.py
-# Main bot entry point & Pyrogram message handlers ├── config.py 
-# Environment variable loader & defaults ├── database.py 
-# SQLite database for stats & upload history ├── downloader.py 
-# Pyrogram media downloader with live progress callback ├── mega_cli.py 
-# Official MEGAcmd wrapper (login, upload, deduplication) ├── progress.py # Progress bar calculation, speed, and ETA formatting ├── requirements.txt # Python package dependencies ├── .gitignore 
-# Git ignore rules └── README.md 
-# Documentation
 
+```
+tg-to-mega/
+├── bot.py                # Main bot entry point & Pyrogram message handlers
+├── config.py             # Environment variable loader & defaults
+├── database.py           # SQLite database for stats & upload history
+├── downloader.py         # Pyrogram media downloader with live progress callback
+├── mega_cli.py           # Official MEGAcmd wrapper (login, upload, deduplication)
+├── progress.py           # Progress bar calculation, speed, and ETA formatting
+├── requirements.txt      # Python package dependencies
+├── .gitignore            # Git ignore rules
+└── README.md             # Documentation
+```
 ---
 
 ## 🔒 Security & Privacy
