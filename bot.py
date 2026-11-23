@@ -10,11 +10,11 @@ from pyrogram.types import (
 )
 from config import Config
 from database import db
-from mega import Mega
-from tg_streamer import TelegramFile
-from progress import human_bytes, time_formatter, progress_callback, create_progress_bar
+from downloader import download_telegram_file
+from mega_cli import MegaCLI
+from progress import human_bytes, time_formatter
 
-# ---- Initialize Bot ---- #
+# ---- Initialize Pyrogram Bot ---- #
 app = Client(
     "tg_to_mega_bot",
     api_id=Config.API_ID,
@@ -22,24 +22,6 @@ app = Client(
     bot_token=Config.BOT_TOKEN,
     in_memory=True,
 )
-
-# Global Mega client (initialized on first use)
-_mega_client: Mega = None
-_mega_lock = asyncio.Lock()
-
-
-async def get_mega() -> Mega:
-    """Get or create the authenticated Mega client."""
-    global _mega_client
-    async with _mega_lock:
-        if _mega_client is None:
-            _mega_client = Mega()
-            success = await _mega_client.login(Config.MEGA_EMAIL, Config.MEGA_PASSWORD)
-            if not success:
-                _mega_client = None
-                raise Exception("Failed to login to Mega.nz. Check your email and password.")
-            print("✅ Logged into Mega.nz successfully!")
-        return _mega_client
 
 
 def is_authorized(user_id: int) -> bool:
@@ -62,9 +44,7 @@ def main_keyboard():
                 InlineKeyboardButton("ℹ️ Help", callback_data="btn_help"),
             ],
             [
-                InlineKeyboardButton(
-                    "☁️ Open Mega.nz", url="https://mega.nz/fm"
-                ),
+                InlineKeyboardButton("☁️ Open Mega.nz", url="https://mega.nz/fm"),
             ],
         ]
     )
@@ -86,14 +66,14 @@ async def start_handler(client: Client, message: Message):
     user_name = message.from_user.first_name or "Friend"
     text = (
         f"👋 **Hello {user_name}!**\n\n"
-        "⚡ **Mega.nz Telegram Uploader**\n\n"
+        "⚡ **Mega.nz Telegram Uploader (Official MEGAcmd Engine)**\n\n"
         "I can upload any file, video, photo, or document from Telegram "
         "directly to your **Mega.nz** cloud storage!\n\n"
         "✨ **Features:**\n"
         "• 🎥 Videos, 📄 Documents, 🎵 Music, 🖼️ Photos\n"
-        "• ⚡ Zero-disk streaming (Telegram → Mega, no temp files)\n"
-        "• 📊 Live progress bar with speed & ETA\n"
-        "• 📁 Custom folder support\n"
+        "• ⚡ Official MEGAcmd engine — fast, stable, no API limits\n"
+        "• 📊 Live progress bar with speed & ETA during download\n"
+        "• 📁 Custom folder support via `/setfolder`\n"
         "• 🔗 Direct shareable Mega.nz links\n"
         "• 💾 20 GB free Mega storage\n\n"
         "Just send me any file to get started! 🚀"
@@ -110,19 +90,18 @@ async def help_handler(client: Client, message: Message):
     text = (
         "📖 **How to Use:**\n\n"
         "1️⃣ **Upload Telegram Files:**\n"
-        "• Send any Video, Photo, Audio, or Document.\n"
-        "• Bot will stream it directly to Mega.nz with a live progress bar.\n"
-        "• You'll get a shareable Mega.nz link!\n\n"
+        "• Send or forward any Video, Photo, Audio, or Document.\n"
+        "• The bot downloads it with a live progress bar, uploads it to Mega.nz, and sends you a shareable link.\n\n"
         "2️⃣ **Manage Folders:**\n"
-        "• `/setfolder Movies` → Uploads go to 'Movies' subfolder.\n"
+        "• `/setfolder Movies` → Uploads go to 'Movies' subfolder on Mega.\n"
         "• `/setfolder default` → Reset to default folder.\n\n"
         "3️⃣ **Check Status:**\n"
         "• `/status` → Your upload stats.\n"
-        "• `/storage` → Mega.nz storage info.\n"
+        "• `/storage` → Mega.nz account storage.\n"
         "• `/recent` → Last 10 uploaded files with links.\n\n"
         "4️⃣ **Limits:**\n"
-        "• Telegram bot files: up to 2 GB (via Pyrogram MTProto).\n"
-        "• Mega free storage: 20 GB total."
+        "• Telegram files: up to 2 GB per file.\n"
+        "• Mega.nz free storage: 20 GB total."
     )
     await message.reply_text(text, reply_markup=back_keyboard())
 
@@ -147,8 +126,6 @@ async def setfolder_handler(client: Client, message: Message):
         return
 
     folder_name = args[1].strip()
-
-    # Sanitize: remove path traversal attempts
     folder_name = folder_name.replace("..", "").replace("\\", "/")
     folder_name = "/".join(p for p in folder_name.split("/") if p and p != ".")
 
@@ -157,7 +134,7 @@ async def setfolder_handler(client: Client, message: Message):
         await message.reply_text("✅ Target folder reset to **Default (TelegramUploads)**.")
     else:
         db.set_custom_folder(message.from_user.id, folder_name)
-        await message.reply_text(f"✅ Upload folder set to: **`{folder_name}`**")
+        await message.reply_text(f"✅ Target folder set to: **`{folder_name}`**")
 
 
 # ---- /status Command ---- #
@@ -187,27 +164,14 @@ async def storage_handler(client: Client, message: Message):
         return
 
     status_msg = await message.reply_text("🔍 **Checking Mega.nz storage...**")
-
-    try:
-        mega = await get_mega()
-        info = await mega.get_storage_info()
-        total = info["total"]
-        used = info["used"]
-        free = info["free"]
-
-        bar = create_progress_bar(used, total, length=14)
-        pct = (used / total * 100) if total > 0 else 0
-
-        text = (
-            "💾 **Mega.nz Storage Info:**\n\n"
-            f"`[{bar}]` **{pct:.1f}% used**\n\n"
-            f"📦 **Used:** `{human_bytes(used)}`\n"
-            f"✅ **Free:** `{human_bytes(free)}`\n"
-            f"📊 **Total:** `{human_bytes(total)}`"
-        )
-        await status_msg.edit_text(text, reply_markup=back_keyboard())
-    except Exception as e:
-        await status_msg.edit_text(f"❌ **Error:** `{str(e)}`")
+    stats = await MegaCLI.get_storage()
+    text = (
+        "💾 **Mega.nz Storage Status:**\n\n"
+        f"📊 **Total:** `{stats.get('total', 'N/A')}`\n"
+        f"📦 **Used:** `{stats.get('used', 'N/A')}`\n"
+        f"✅ **Free:** `{stats.get('free', 'N/A')}`"
+    )
+    await status_msg.edit_text(text, reply_markup=back_keyboard())
 
 
 # ---- /recent Command ---- #
@@ -270,24 +234,14 @@ async def callback_handler(client: Client, query: CallbackQuery):
             reply_markup=back_keyboard(),
         )
     elif data == "btn_storage":
-        await query.message.edit_text("🔍 **Checking Mega.nz storage...**")
-        try:
-            mega = await get_mega()
-            info = await mega.get_storage_info()
-            bar = create_progress_bar(info["used"], info["total"], length=14)
-            pct = (info["used"] / info["total"] * 100) if info["total"] > 0 else 0
-            await query.message.edit_text(
-                f"💾 **Mega.nz Storage:**\n\n"
-                f"`[{bar}]` **{pct:.1f}% used**\n\n"
-                f"📦 Used: `{human_bytes(info['used'])}`\n"
-                f"✅ Free: `{human_bytes(info['free'])}`\n"
-                f"📊 Total: `{human_bytes(info['total'])}`",
-                reply_markup=back_keyboard(),
-            )
-        except Exception as e:
-            await query.message.edit_text(
-                f"❌ **Error:** `{str(e)}`", reply_markup=back_keyboard()
-            )
+        stats = await MegaCLI.get_storage()
+        await query.message.edit_text(
+            f"💾 **Mega.nz Storage:**\n\n"
+            f"📊 Total: `{stats.get('total', 'N/A')}`\n"
+            f"📦 Used: `{stats.get('used', 'N/A')}`\n"
+            f"✅ Free: `{stats.get('free', 'N/A')}`",
+            reply_markup=back_keyboard(),
+        )
 
 
 # ---- Telegram Media Handler (Core Upload Logic) ---- #
@@ -321,14 +275,12 @@ async def telegram_media_handler(client: Client, message: Message):
     if message.photo:
         file_name = f"Photo_{int(time.time())}.jpg"
         file_size = message.photo.file_size
-        file_id = message.photo.file_id
     elif media:
         file_name = getattr(media, "file_name", None) or f"File_{int(time.time())}"
         file_size = getattr(media, "file_size", 0)
-        file_id = media.file_id
     else:
-        await message.reply_text("❌ Could not detect file.")
-        return
+        file_name = f"File_{int(time.time())}"
+        file_size = 0
 
     if file_size == 0:
         await message.reply_text("❌ **Error:** File size is 0 bytes.")
@@ -337,105 +289,114 @@ async def telegram_media_handler(client: Client, message: Message):
     status_msg = await message.reply_text(
         f"🔍 **Processing:** `{file_name}`\n"
         f"📦 **Size:** `{human_bytes(file_size)}`\n"
-        f"⏳ Connecting to Mega.nz...",
+        "⏳ Initializing download...",
         quote=True,
     )
 
+    # Step 1: Download from Telegram to local disk with live progress
+    file_path = await download_telegram_file(client, message, status_msg)
+    if not file_path or not os.path.exists(file_path):
+        return
+
+    # Step 2: Determine target folder on Mega
+    user_info = db.get_user(message.from_user.id)
+    custom_folder = user_info.get("custom_folder", "").strip()
+    base_folder = Config.MEGA_FOLDER
+    if custom_folder:
+        target_folder = f"{base_folder.rstrip('/')}/{custom_folder}"
+    else:
+        target_folder = base_folder
+
+    await status_msg.edit_text(
+        f"📤 **Uploading to Mega.nz...**\n\n"
+        f"📄 **File:** `{file_name}`\n"
+        f"📦 **Size:** `{human_bytes(file_size)}`\n"
+        f"📂 **Folder:** `{target_folder}`\n\n"
+        "⚡ Transferring via official MEGAcmd engine..."
+    )
+
+    start_upload_time = time.time()
+
+    # Step 3: Upload via official MEGAcmd
+    success, mega_link, msg = await MegaCLI.upload_file(file_path, target_folder)
+
+    # Step 4: Remove local temporary file
     try:
-        # Step 1: Get Mega client
-        mega = await get_mega()
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    except Exception:
+        pass
 
-        # Step 2: Determine target folder
-        user_info = db.get_user(message.from_user.id)
-        custom_folder = user_info.get("custom_folder", "").strip()
+    # Step 5: Send response
+    if success:
+        elapsed = time.time() - start_upload_time
+        avg_speed = human_bytes(int(file_size / elapsed)) if elapsed > 0 else "N/A"
 
-        base_folder = Config.MEGA_FOLDER
-        if custom_folder:
-            target_folder = f"{base_folder.rstrip('/')}/{custom_folder}"
-        else:
-            target_folder = base_folder
+        # Update database stats
+        db.update_stats(message.from_user.id, file_size)
+        db.save_upload(message.from_user.id, file_name, file_size, mega_link or "N/A")
 
-        await status_msg.edit_text(
-            f"📁 **Setting up folder:** `{target_folder}`\n"
-            f"⏳ Preparing upload..."
+        success_text = (
+            "🎉 **Successfully Uploaded to Mega.nz!**\n\n"
+            f"📄 **File:** `{file_name}`\n"
+            f"📦 **Size:** `{human_bytes(file_size)}`\n"
+            f"📂 **Folder:** `{target_folder}`\n"
+            f"⚡ **Upload Speed:** `{avg_speed}/s`\n"
+            f"⏱️ **Upload Time:** `{time_formatter(elapsed)}`\n\n"
+            f"🔗 **Download Link:**\n`{mega_link}`"
         )
-
-        folder_id = await mega.find_or_create_folder(target_folder)
-
-        # Step 3: Initialize Telegram file streamer
-        tg_file = TelegramFile(client, file_id, file_size)
-        await tg_file.start_buffer()
-
-        start_time = time.time()
-
-        # Step 4: Progress callback for Mega upload
-        async def upload_progress(current, total):
-            await progress_callback(
-                current, total, status_msg, start_time, "📤 Uploading to Mega.nz"
-            )
-
-        # Step 5: Stream upload to Mega
-        mega_link = await mega.upload_from_stream(
-            read_func=tg_file.read,
-            file_size=file_size,
-            filename=file_name,
-            dest_folder_id=folder_id,
-            callback=upload_progress,
-        )
-
-        if mega_link:
-            # Save to database
-            db.update_stats(message.from_user.id, file_size)
-            db.save_upload(message.from_user.id, file_name, file_size, mega_link)
-
-            elapsed = time.time() - start_time
-            avg_speed = human_bytes(int(file_size / elapsed)) if elapsed > 0 else "N/A"
-
-            success_text = (
-                "🎉 **Successfully Uploaded to Mega.nz!**\n\n"
-                f"📄 **File:** `{file_name}`\n"
-                f"📦 **Size:** `{human_bytes(file_size)}`\n"
-                f"📂 **Folder:** `{target_folder}`\n"
-                f"⚡ **Avg Speed:** `{avg_speed}/s`\n"
-                f"⏱️ **Time:** `{time_formatter(elapsed)}`\n\n"
-                f"🔗 **Download Link:**\n`{mega_link}`"
-            )
-            keyboard = InlineKeyboardMarkup(
+        keyboard = InlineKeyboardMarkup(
+            [
                 [
-                    [
-                        InlineKeyboardButton("📥 Open Link", url=mega_link),
-                        InlineKeyboardButton("☁️ Open Mega", url="https://mega.nz/fm"),
-                    ]
+                    InlineKeyboardButton("📥 Open Link", url=mega_link),
+                    InlineKeyboardButton("☁️ Open Mega", url="https://mega.nz/fm"),
                 ]
-            )
-            await status_msg.edit_text(success_text, reply_markup=keyboard)
-        else:
-            await status_msg.edit_text("❌ **Upload Failed:** Could not complete upload to Mega.nz.")
-
-    except Exception as e:
-        error_msg = str(e)
-        if len(error_msg) > 200:
-            error_msg = error_msg[:200] + "..."
-        await status_msg.edit_text(f"❌ **Error:** `{error_msg}`")
+            ]
+        )
+        await status_msg.edit_text(success_text, reply_markup=keyboard)
+    else:
+        await status_msg.edit_text(f"❌ **Upload Failed:** `{msg}`")
 
 
 # ---- Start/Help fallback for non-media text ---- #
-@app.on_message(filters.private & filters.text & ~filters.command(["start", "help", "status", "storage", "setfolder", "recent"]))
+@app.on_message(
+    filters.private
+    & filters.text
+    & ~filters.command(["start", "help", "status", "storage", "setfolder", "recent"])
+)
 async def text_fallback(client: Client, message: Message):
     if not is_authorized(message.from_user.id):
         return
     await message.reply_text(
-        "📎 **Send me a file** (video, photo, document, audio) and I'll upload it to Mega.nz!\n\n"
+        "📎 **Send me any media** (video, document, audio, photo) to upload to Mega.nz!\n\n"
         "Type `/help` for all commands.",
     )
 
 
 # ---- Main Entry Point ---- #
-if __name__ == "__main__":
+async def main():
     print("🚀 Mega.nz Telegram Bot is starting...")
     print(f"📂 Target Mega folder: {Config.MEGA_FOLDER}")
     if Config.OWNER_ID:
         print(f"🔒 Restricted to user ID: {Config.OWNER_ID}")
+
+    # Initialize MEGAcmd login
+    print("🔐 Authenticating with MEGAcmd...")
+    login_ok, login_msg = await MegaCLI.login(Config.MEGA_EMAIL, Config.MEGA_PASSWORD)
+    if login_ok:
+        print(f"✅ MEGAcmd Login: {login_msg}")
     else:
-        print("⚠️ No OWNER_ID set — bot is open to all users!")
-    app.run()
+        print(f"⚠️ MEGAcmd Warning: {login_msg}")
+
+    print("🤖 Starting Pyrogram Telegram Client...")
+    await app.start()
+    print("✨ Bot is active and listening for messages!")
+    
+    # Idle until interrupted
+    from pyrogram import idle
+    await idle()
+    await app.stop()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
