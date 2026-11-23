@@ -15,7 +15,6 @@ async def run_cmd(cmd_list: list) -> Tuple[int, str]:
         stdout, stderr = await proc.communicate()
         out = stdout.decode("utf-8", errors="ignore").strip()
         err = stderr.decode("utf-8", errors="ignore").strip()
-        # Combine stdout and stderr so no output is missed
         if out and err:
             output = f"{out}\n{err}"
         elif out:
@@ -84,37 +83,55 @@ class MegaCLI:
             remote_folder = "/" + remote_folder
         remote_folder = remote_folder.rstrip("/")
 
-        # Step 1: Upload via mega-put (-c automatically creates destination folder)
-        print(f"⚡ Running mega-put: {local_path} -> {remote_folder}")
-        put_code, put_out = await run_cmd(["mega-put", "-c", local_path, remote_folder])
+        # Step 1: Ensure the remote destination folder exists
+        print(f"📁 Ensuring remote directory exists: {remote_folder}")
+        await run_cmd(["mega-mkdir", "-p", remote_folder])
+
+        # Step 2: Upload via mega-put into destination folder (with trailing slash)
+        dest_target = f"{remote_folder}/"
+        print(f"⚡ Running mega-put: {local_path} -> {dest_target}")
+        put_code, put_out = await run_cmd(["mega-put", local_path, dest_target])
+        print(f"📋 mega-put output (code {put_code}):\n{put_out}")
         if put_code != 0:
             return False, None, f"mega-put error: {put_out}"
 
+        # Step 3: Find exact remote file path using mega-find
         remote_file_path = f"{remote_folder}/{file_name}"
+        find_code, find_out = await run_cmd(["mega-find", remote_folder, f"--pattern={file_name}"])
+        print(f"🔍 mega-find output (code {find_code}):\n{find_out}")
+        if find_code == 0 and find_out:
+            lines = [l.strip() for l in find_out.splitlines() if l.strip()]
+            if lines:
+                remote_file_path = lines[-1]
+        else:
+            # Fallback search across root if not found in folder
+            root_find_code, root_find_out = await run_cmd(["mega-find", "/", f"--pattern={file_name}"])
+            if root_find_code == 0 and root_find_out:
+                lines = [l.strip() for l in root_find_out.splitlines() if l.strip()]
+                if lines:
+                    remote_file_path = lines[-1]
+
         print(f"🔗 Requesting export for: {remote_file_path}")
 
-        # Step 2: Try mega-export -a
+        # Step 4: Export link via mega-export -a
         exp_code, exp_out = await run_cmd(["mega-export", "-a", remote_file_path])
         print(f"📋 mega-export output (code {exp_code}):\n{exp_out}")
 
-        # Regex matches any https://mega.nz/... link format
         match = re.search(r"https://mega\.nz/[^\s\'\"\)]+", exp_out)
         if match:
             return True, match.group(0), "Success"
 
-        # Step 3: Fallback - query existing export without -a
+        # Step 5: Fallback - query existing export
         q_code, q_out = await run_cmd(["mega-export", remote_file_path])
         print(f"📋 mega-export query output (code {q_code}):\n{q_out}")
         match = re.search(r"https://mega\.nz/[^\s\'\"\)]+", q_out)
         if match:
             return True, match.group(0), "Success"
 
-        # Step 4: Fallback - list all exports
+        # Step 6: Fallback - search all exports for filename
         list_code, list_out = await run_cmd(["mega-export"])
         match = re.search(rf"{re.escape(file_name)}.*?(https://mega\.nz/[^\s\'\"\)]+)", list_out)
         if match:
             return True, match.group(1), "Success"
 
-        # If upload succeeded but link couldn't be generated, return a web link to the folder
-        web_folder_link = "https://mega.nz/fm"
-        return True, web_folder_link, f"Uploaded to Mega folder {remote_folder}"
+        return True, "https://mega.nz/fm", f"Uploaded to {remote_file_path}"
